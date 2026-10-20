@@ -1,0 +1,64 @@
+Steps on the offline server
+Copy the whole folder to the server, e.g. /root/snc-sso-offline-20261018/.
+Install, with SSO off:
+
+cd /root/snc-sso-offline-20261018
+./apply-sso-offline.sh /path/to/app        # e.g. /app/snc
+It backs up every file it touches, and restores them automatically if any step fails. It's safe to run again.
+It edits signin.php and LegacyGateway.php in place instead of replacing them, so the offline server keeps its own login code. This matters because the VPS signin.php has the AD password check commented out, and copying it over would carry that into production. If either file doesn't look as expected, the installer stops without changing it.
+It adds the nginx route (checks the config, then reloads) and the sso service in Compose, which stays stopped until you enable it.
+The idle timeout takes effect immediately: 15 minutes, snc_session_idle_min, 0 = off.
+The image: if snc-sso-image.tar.gz is in the folder, the installer checks and loads it. If not, build it once through the proxy:
+
+cd /path/to/app && COMPOSE_PROFILES=sso docker compose build \
+  --build-arg HTTP_PROXY=http://10.100.100.103:3128 \
+  --build-arg HTTPS_PROXY=http://10.100.100.103:3128 sso
+Switch on, after the AD team delivers the keytab:
+
+cp snc-web.keytab /path/to/app/secrets/snc-web.keytab
+/path/to/app/scripts/sso-setup.sh /path/to/app
+cd /path/to/app && COMPOSE_PROFILES=sso docker compose up -d sso
+# config.php:  $config['snc_sso_enabled'] = TRUE;
+Test on a domain PC: run klist purge, then open https://aml.primebank.com.bd. You should be signed in with no password, and klist should show HTTP/aml.primebank.com.bd @ PRIMEBANK.COM.BD.
+
+
+
+
+
+
+Test on mac
+
+Try it in your browser
+1. Tell macOS about the test domain (once, in Terminal; no sudo needed):
+
+cat > ~/Library/Preferences/edu.mit.Kerberos <<'EOF'
+[libdefaults]
+    default_realm = SNCTEST.LOCAL
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+[realms]
+    SNCTEST.LOCAL = {
+        kdc = tcp/think-ai.site:88
+    }
+[domain_realm]
+    think-ai.site = SNCTEST.LOCAL
+    .think-ai.site = SNCTEST.LOCAL
+EOF
+
+2. "Log in" to the test domain. This is what Windows does at logon:
+
+/usr/bin/kinit mr1118021@SNCTEST.LOCAL        # password: TestPass1
+/usr/bin/klist                               # shows krbtgt/SNCTEST.LOCAL
+
+
+
+3. Open the app:
+
+Safari: open http://www.think-ai.site:8080/signin. It uses the ticket automatically.
+Chrome: quit Chrome completely, then start it with the allow-list:
+
+open -na "Google Chrome" --args --auth-server-allowlist="think-ai.site,www.think-ai.site"
+Then open http://www.think-ai.site:8080/signin.
+What you should see: the login page goes straight to the "Single Sign-On enabled — Signed in with your Windows account" card, showing SNCTEST\mr111802, with the spinner. After 2 seconds, home opens. Also try Sign out: you should get "You have signed out" and stay signed out. Running klist should then also show HTTP/…think-ai.site@SNCTEST.LOCAL.
+
+To see the "no ticket" behaviour: run /usr/bin/kdestroy, then open the sign-in page. You'll get the normal login form.
